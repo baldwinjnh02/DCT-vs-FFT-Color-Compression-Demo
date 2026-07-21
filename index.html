@@ -50,7 +50,6 @@
             <h3>Info</h3>
             <p style="font-size: 0.9em; text-align: left; padding: 10px;">
                 
-           // Each transform runs on 8x8 blocks of the Cb/Cr chroma channels. The chosen number of lowest-frequency coefficients are kept, and the rest are zeroed out before reconstruction. Error maps show absolute differences.
             </p>
         </div>
         <div class="card">
@@ -92,7 +91,7 @@
             document.getElementById('statusText').innerText = "Processing... (This may take a few seconds)";
             document.getElementById('statusText').style.color = "#f0ad4e";
             
-            // Allow UI to update before heavy synchronous blocking tasks
+            // Allow UI to update
             setTimeout(processImage, 50);
         });
 
@@ -125,8 +124,8 @@
             let canvasOrg = document.getElementById('canvasOriginal');
             let ctx = canvasOrg.getContext('2d');
             
-            // Scale down to max 512px for performance
-            let scale = Math.min(1.0, 512 / Math.max(imgElement.width, imgElement.height));
+            // Scale down to max 256px for performance
+            let scale = Math.min(1.0, 256 / Math.max(imgElement.width, imgElement.height));
             let origW = Math.round(imgElement.width * scale);
             let origH = Math.round(imgElement.height * scale);
             
