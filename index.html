@@ -91,7 +91,6 @@
             document.getElementById('statusText').innerText = "Processing... (This may take a few seconds)";
             document.getElementById('statusText').style.color = "#f0ad4e";
             
-            // Allow UI to update before heavy synchronous blocking tasks
             setTimeout(processImage, 50);
         });
 
@@ -125,7 +124,6 @@
                 let canvasOrg = document.getElementById('canvasOriginal');
                 let ctx = canvasOrg.getContext('2d');
                 
-                // Scale down to max 256px for reliable mobile performance
                 let scale = Math.min(1.0, 256 / Math.max(imgElement.width, imgElement.height));
                 let origW = Math.round(imgElement.width * scale);
                 let origH = Math.round(imgElement.height * scale);
@@ -135,7 +133,6 @@
                 
                 let src = cv.imread(canvasOrg);
                 
-                // Pad to multiple of 8
                 let padW = (8 - (origW % 8)) % 8;
                 let padH = (8 - (origH % 8)) % 8;
                 let padded = new cv.Mat();
@@ -144,7 +141,6 @@
                 let w = padded.cols;
                 let h = padded.rows;
 
-                // Convert to YCrCb
                 let ycrcb = new cv.Mat();
                 cv.cvtColor(padded, ycrcb, cv.COLOR_RGBA2RGB);
                 cv.cvtColor(ycrcb, ycrcb, cv.COLOR_RGB2YCrCb);
@@ -168,13 +164,26 @@
                 let block = new cv.Mat();
                 let block32f = new cv.Mat();
                 let transformed = new cv.Mat();
+
+                // ---------------------------------------------------------
+                // NEW: Manually generate 8x8 Orthogonal DCT Matrix (D)
+                // ---------------------------------------------------------
+                let D = new cv.Mat(8, 8, cv.CV_32F);
+                let Dt = new cv.Mat(8, 8, cv.CV_32F);
+                for (let i = 0; i < 8; i++) {
+                    for (let j = 0; j < 8; j++) {
+                        let val = (i === 0) ? Math.sqrt(1.0 / 8.0) : Math.sqrt(2.0 / 8.0) * Math.cos((Math.PI / 8.0) * i * (j + 0.5));
+                        D.data32F[i * 8 + j] = val;
+                        Dt.data32F[j * 8 + i] = val; // Transpose matrix
+                    }
+                }
+                let tempMat = new cv.Mat();
+                let emptyMat = cv.Mat.zeros(8, 8, cv.CV_32F); // Safe zero matrix for gemm padding
                 
-                // Block processing loop
                 for (let y = 0; y < h; y += 8) {
                     for (let x = 0; x < w; x += 8) {
                         let rect = new cv.Rect(x, y, 8, 8);
                         
-                        // Helper to process a single block
                         const processBlock = (channelMat, outMat, mask, isFFT) => {
                             let roi = channelMat.roi(rect);
                             roi.convertTo(block32f, cv.CV_32F);
@@ -184,17 +193,23 @@
                                 cv.multiply(transformed, maskFFTComplex, transformed);
                                 cv.idft(transformed, transformed, cv.DFT_REAL_OUTPUT | cv.DFT_SCALE);
                             } else {
-                                cv.dct(block32f, transformed);
+                                // Manual 2D DCT: D * block * D^T
+                                cv.gemm(D, block32f, 1.0, emptyMat, 0.0, tempMat, 0);
+                                cv.gemm(tempMat, Dt, 1.0, emptyMat, 0.0, transformed, 0);
+                                
+                                // Apply low-frequency mask
                                 cv.multiply(transformed, maskDCT, transformed);
-                                cv.idct(transformed, transformed);
+                                
+                                // Manual 2D IDCT: D^T * transformed * D
+                                cv.gemm(Dt, transformed, 1.0, emptyMat, 0.0, tempMat, 0);
+                                cv.gemm(tempMat, D, 1.0, emptyMat, 0.0, transformed, 0);
                             }
                             
                             transformed.convertTo(block, cv.CV_8U);
                             
-                            // MEMORY LEAK FIX: Explicitly handle the destination ROI
                             let destRoi = outMat.roi(rect);
                             block.copyTo(destRoi);
-                            destRoi.delete(); // Delete to prevent iOS WASM crash
+                            destRoi.delete(); 
                             roi.delete();
                         };
 
@@ -205,7 +220,6 @@
                     }
                 }
 
-                // Reconstruct and Render
                 const renderResult = (crChannel, cbChannel, canvasId) => {
                     let merged = new cv.Mat();
                     let v = new cv.MatVector();
@@ -221,7 +235,6 @@
                 renderResult(fftCr, fftCb, 'canvasFFT');
                 renderResult(dctCr, dctCb, 'canvasDCT');
 
-                // Error Maps
                 const renderError = (origCr, origCb, reconCr, reconCb, canvasId) => {
                     let diffCr = new cv.Mat(), diffCb = new cv.Mat();
                     cv.absdiff(origCr, reconCr, diffCr);
@@ -243,18 +256,19 @@
                 renderError(Cr, Cb, fftCr, fftCb, 'canvasErrFFT');
                 renderError(Cr, Cb, dctCr, dctCb, 'canvasErrDCT');
 
-                // Cleanup main variables
                 src.delete(); padded.delete(); ycrcb.delete(); channels.delete();
                 Y.delete(); Cr.delete(); Cb.delete();
                 dctCr.delete(); dctCb.delete(); fftCr.delete(); fftCb.delete();
                 maskDCT.delete(); maskFFT.delete(); maskFFTComplex.delete(); mv.delete();
                 block.delete(); block32f.delete(); transformed.delete();
+                
+                // Cleanup newly added matrices
+                D.delete(); Dt.delete(); tempMat.delete(); emptyMat.delete();
 
                 document.getElementById('statusText').innerText = "Done!";
                 document.getElementById('statusText').style.color = "#5cb85c";
 
             } catch (err) {
-                // Safely grab the OpenCV error message if it fails again
                 let errorMsg = err;
                 if (typeof err === 'number') {
                     try { errorMsg = cv.exceptionFromPtr(err).msg; } catch(e) {}
