@@ -22,12 +22,12 @@
     <h1 style="text-align: center;">DCT vs FFT for color compression</h1>
     
     <div class="controls">
-        <label for="imageUpload"><strong>1. Select Image:</strong></label>
+        <label for="imageUpload"><strong>Select Image:</strong></label>
         <input type="file" id="imageUpload" accept="image/png, image/jpeg" disabled>
         <span id="statusText" style="color: #d9534f; font-weight: bold; margin-left: 10px;">Loading Engine...</span>
         
         <div style="margin-top: 15px;">
-            <label for="coeffInput"><strong>2. # of color coefficients to retain per 8x8 block (1-64):</strong></label>
+            <label for="coeffInput"><strong># of color coefficients to retain per 8x8 block (1-64):</strong></label>
             <input type="number" id="coeffInput" min="1" max="64" value="4" disabled>
             <button id="processBtn" disabled>Process</button>
         </div>
