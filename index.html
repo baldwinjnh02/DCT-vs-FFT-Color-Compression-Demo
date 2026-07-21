@@ -112,7 +112,7 @@
             return cv.matFromArray(8, 8, cv.CV_32F, maskArr);
         }
 
-        function processImage() {
+function processImage() {
             try {
                 let n = parseInt(document.getElementById('coeffInput').value);
                 n = Math.max(1, Math.min(64, n));
@@ -165,20 +165,18 @@
                 let block32f = new cv.Mat();
                 let transformed = new cv.Mat();
 
-                // ---------------------------------------------------------
-                // NEW: Manually generate 8x8 Orthogonal DCT Matrix (D)
-                // ---------------------------------------------------------
+                // Manually generate 8x8 Orthogonal DCT Matrix (D)
                 let D = new cv.Mat(8, 8, cv.CV_32F);
                 let Dt = new cv.Mat(8, 8, cv.CV_32F);
                 for (let i = 0; i < 8; i++) {
                     for (let j = 0; j < 8; j++) {
                         let val = (i === 0) ? Math.sqrt(1.0 / 8.0) : Math.sqrt(2.0 / 8.0) * Math.cos((Math.PI / 8.0) * i * (j + 0.5));
                         D.data32F[i * 8 + j] = val;
-                        Dt.data32F[j * 8 + i] = val; // Transpose matrix
+                        Dt.data32F[j * 8 + i] = val; 
                     }
                 }
                 let tempMat = new cv.Mat();
-                let emptyMat = cv.Mat.zeros(8, 8, cv.CV_32F); // Safe zero matrix for gemm padding
+                let emptyMat = cv.Mat.zeros(8, 8, cv.CV_32F); 
                 
                 for (let y = 0; y < h; y += 8) {
                     for (let x = 0; x < w; x += 8) {
@@ -191,16 +189,16 @@
                             if (isFFT) {
                                 cv.dft(block32f, transformed, cv.DFT_COMPLEX_OUTPUT);
                                 cv.multiply(transformed, maskFFTComplex, transformed);
-                                cv.idft(transformed, transformed, cv.DFT_REAL_OUTPUT | cv.DFT_SCALE);
+                                // FIX APPLIED HERE:
+                                cv.dft(transformed, transformed, cv.DFT_INVERSE | cv.DFT_REAL_OUTPUT | cv.DFT_SCALE);
                             } else {
-                                // Manual 2D DCT: D * block * D^T
+                                // Manual 2D DCT
                                 cv.gemm(D, block32f, 1.0, emptyMat, 0.0, tempMat, 0);
                                 cv.gemm(tempMat, Dt, 1.0, emptyMat, 0.0, transformed, 0);
                                 
-                                // Apply low-frequency mask
                                 cv.multiply(transformed, maskDCT, transformed);
                                 
-                                // Manual 2D IDCT: D^T * transformed * D
+                                // Manual 2D IDCT
                                 cv.gemm(Dt, transformed, 1.0, emptyMat, 0.0, tempMat, 0);
                                 cv.gemm(tempMat, D, 1.0, emptyMat, 0.0, transformed, 0);
                             }
@@ -261,8 +259,6 @@
                 dctCr.delete(); dctCb.delete(); fftCr.delete(); fftCb.delete();
                 maskDCT.delete(); maskFFT.delete(); maskFFTComplex.delete(); mv.delete();
                 block.delete(); block32f.delete(); transformed.delete();
-                
-                // Cleanup newly added matrices
                 D.delete(); Dt.delete(); tempMat.delete(); emptyMat.delete();
 
                 document.getElementById('statusText').innerText = "Done!";
