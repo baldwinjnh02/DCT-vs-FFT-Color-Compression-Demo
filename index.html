@@ -62,7 +62,7 @@
         </div>
     </div>
 
-    <script>
+<script>
         let imgElement = new Image();
         let isReady = false;
 
@@ -91,7 +91,7 @@
             document.getElementById('statusText').innerText = "Processing... (This may take a few seconds)";
             document.getElementById('statusText').style.color = "#f0ad4e";
             
-            // Allow UI to update
+            // Allow UI to update before heavy synchronous blocking tasks
             setTimeout(processImage, 50);
         });
 
@@ -114,141 +114,155 @@
         }
 
         function processImage() {
-            let n = parseInt(document.getElementById('coeffInput').value);
-            n = Math.max(1, Math.min(64, n));
+            try {
+                let n = parseInt(document.getElementById('coeffInput').value);
+                n = Math.max(1, Math.min(64, n));
 
-            document.getElementById('outputGrid').style.display = 'grid';
-            document.getElementById('fftTitle').innerText = `FFT Recon (${n}/64 coeffs)`;
-            document.getElementById('dctTitle').innerText = `DCT Recon (${n}/64 coeffs)`;
+                document.getElementById('outputGrid').style.display = 'grid';
+                document.getElementById('fftTitle').innerText = `FFT Recon (${n}/64 coeffs)`;
+                document.getElementById('dctTitle').innerText = `DCT Recon (${n}/64 coeffs)`;
 
-            let canvasOrg = document.getElementById('canvasOriginal');
-            let ctx = canvasOrg.getContext('2d');
-            
-            // Scale down to max 256px for performance
-            let scale = Math.min(1.0, 256 / Math.max(imgElement.width, imgElement.height));
-            let origW = Math.round(imgElement.width * scale);
-            let origH = Math.round(imgElement.height * scale);
-            
-            canvasOrg.width = origW; canvasOrg.height = origH;
-            ctx.drawImage(imgElement, 0, 0, origW, origH);
-            
-            let src = cv.imread(canvasOrg);
-            
-            // Pad to multiple of 8
-            let padW = (8 - (origW % 8)) % 8;
-            let padH = (8 - (origH % 8)) % 8;
-            let padded = new cv.Mat();
-            cv.copyMakeBorder(src, padded, 0, padH, 0, padW, cv.BORDER_REPLICATE);
-            
-            let w = padded.cols;
-            let h = padded.rows;
+                let canvasOrg = document.getElementById('canvasOriginal');
+                let ctx = canvasOrg.getContext('2d');
+                
+                // Scale down to max 256px for reliable mobile performance
+                let scale = Math.min(1.0, 256 / Math.max(imgElement.width, imgElement.height));
+                let origW = Math.round(imgElement.width * scale);
+                let origH = Math.round(imgElement.height * scale);
+                
+                canvasOrg.width = origW; canvasOrg.height = origH;
+                ctx.drawImage(imgElement, 0, 0, origW, origH);
+                
+                let src = cv.imread(canvasOrg);
+                
+                // Pad to multiple of 8
+                let padW = (8 - (origW % 8)) % 8;
+                let padH = (8 - (origH % 8)) % 8;
+                let padded = new cv.Mat();
+                cv.copyMakeBorder(src, padded, 0, padH, 0, padW, cv.BORDER_REPLICATE);
+                
+                let w = padded.cols;
+                let h = padded.rows;
 
-            // Convert to YCrCb
-            let ycrcb = new cv.Mat();
-            cv.cvtColor(padded, ycrcb, cv.COLOR_RGBA2RGB);
-            cv.cvtColor(ycrcb, ycrcb, cv.COLOR_RGB2YCrCb);
+                // Convert to YCrCb
+                let ycrcb = new cv.Mat();
+                cv.cvtColor(padded, ycrcb, cv.COLOR_RGBA2RGB);
+                cv.cvtColor(ycrcb, ycrcb, cv.COLOR_RGB2YCrCb);
 
-            let channels = new cv.MatVector();
-            cv.split(ycrcb, channels);
-            let Y = channels.get(0);
-            let Cr = channels.get(1);
-            let Cb = channels.get(2);
+                let channels = new cv.MatVector();
+                cv.split(ycrcb, channels);
+                let Y = channels.get(0);
+                let Cr = channels.get(1);
+                let Cb = channels.get(2);
 
-            let dctCr = Cr.clone(), dctCb = Cb.clone();
-            let fftCr = Cr.clone(), fftCb = Cb.clone();
+                let dctCr = Cr.clone(), dctCb = Cb.clone();
+                let fftCr = Cr.clone(), fftCb = Cb.clone();
 
-            let maskDCT = getTopNMask(n, false);
-            let maskFFT = getTopNMask(n, true);
-            let maskFFTComplex = new cv.Mat();
-            let mv = new cv.MatVector();
-            mv.push_back(maskFFT); mv.push_back(maskFFT);
-            cv.merge(mv, maskFFTComplex); // FFT uses 2 channels (real, imag)
+                let maskDCT = getTopNMask(n, false);
+                let maskFFT = getTopNMask(n, true);
+                let maskFFTComplex = new cv.Mat();
+                let mv = new cv.MatVector();
+                mv.push_back(maskFFT); mv.push_back(maskFFT);
+                cv.merge(mv, maskFFTComplex);
 
-            let block = new cv.Mat();
-            let block32f = new cv.Mat();
-            let transformed = new cv.Mat();
-            
-            // Block processing loop
-            for (let y = 0; y < h; y += 8) {
-                for (let x = 0; x < w; x += 8) {
-                    let rect = new cv.Rect(x, y, 8, 8);
-                    
-                    // Helper to process a single block
-                    const processBlock = (channelMat, outMat, mask, isFFT) => {
-                        let roi = channelMat.roi(rect);
-                        roi.convertTo(block32f, cv.CV_32F);
+                let block = new cv.Mat();
+                let block32f = new cv.Mat();
+                let transformed = new cv.Mat();
+                
+                // Block processing loop
+                for (let y = 0; y < h; y += 8) {
+                    for (let x = 0; x < w; x += 8) {
+                        let rect = new cv.Rect(x, y, 8, 8);
                         
-                        if (isFFT) {
-                            cv.dft(block32f, transformed, cv.DFT_COMPLEX_OUTPUT);
-                            cv.multiply(transformed, maskFFTComplex, transformed);
-                            cv.idft(transformed, transformed, cv.DFT_REAL_OUTPUT | cv.DFT_SCALE);
-                        } else {
-                            // OpenCV DCT isn't strictly ortho normalized by default, but provides similar visual results
-                            cv.dct(block32f, transformed);
-                            cv.multiply(transformed, maskDCT, transformed);
-                            cv.idct(transformed, transformed);
-                        }
-                        
-                        transformed.convertTo(block, cv.CV_8U);
-                        block.copyTo(outMat.roi(rect));
-                        roi.delete();
-                    };
+                        // Helper to process a single block
+                        const processBlock = (channelMat, outMat, mask, isFFT) => {
+                            let roi = channelMat.roi(rect);
+                            roi.convertTo(block32f, cv.CV_32F);
+                            
+                            if (isFFT) {
+                                cv.dft(block32f, transformed, cv.DFT_COMPLEX_OUTPUT);
+                                cv.multiply(transformed, maskFFTComplex, transformed);
+                                cv.idft(transformed, transformed, cv.DFT_REAL_OUTPUT | cv.DFT_SCALE);
+                            } else {
+                                cv.dct(block32f, transformed);
+                                cv.multiply(transformed, maskDCT, transformed);
+                                cv.idct(transformed, transformed);
+                            }
+                            
+                            transformed.convertTo(block, cv.CV_8U);
+                            
+                            // MEMORY LEAK FIX: Explicitly handle the destination ROI
+                            let destRoi = outMat.roi(rect);
+                            block.copyTo(destRoi);
+                            destRoi.delete(); // Delete to prevent iOS WASM crash
+                            roi.delete();
+                        };
 
-                    processBlock(Cr, dctCr, maskDCT, false);
-                    processBlock(Cb, dctCb, maskDCT, false);
-                    processBlock(Cr, fftCr, maskFFT, true);
-                    processBlock(Cb, fftCb, maskFFT, true);
+                        processBlock(Cr, dctCr, maskDCT, false);
+                        processBlock(Cb, dctCb, maskDCT, false);
+                        processBlock(Cr, fftCr, maskFFT, true);
+                        processBlock(Cb, fftCb, maskFFT, true);
+                    }
                 }
+
+                // Reconstruct and Render
+                const renderResult = (crChannel, cbChannel, canvasId) => {
+                    let merged = new cv.Mat();
+                    let v = new cv.MatVector();
+                    v.push_back(Y); v.push_back(crChannel); v.push_back(cbChannel);
+                    cv.merge(v, merged);
+                    let rgb = new cv.Mat();
+                    cv.cvtColor(merged, rgb, cv.COLOR_YCrCb2RGB);
+                    let cropped = rgb.roi(new cv.Rect(0, 0, origW, origH));
+                    cv.imshow(canvasId, cropped);
+                    merged.delete(); rgb.delete(); cropped.delete(); v.delete();
+                };
+
+                renderResult(fftCr, fftCb, 'canvasFFT');
+                renderResult(dctCr, dctCb, 'canvasDCT');
+
+                // Error Maps
+                const renderError = (origCr, origCb, reconCr, reconCb, canvasId) => {
+                    let diffCr = new cv.Mat(), diffCb = new cv.Mat();
+                    cv.absdiff(origCr, reconCr, diffCr);
+                    cv.absdiff(origCb, reconCb, diffCb);
+                    
+                    let errMap = new cv.Mat();
+                    cv.addWeighted(diffCr, 0.5, diffCb, 0.5, 0, errMap);
+                    
+                    cv.convertScaleAbs(errMap, errMap, 255/8, 0); 
+                    let heatmap = new cv.Mat();
+                    cv.applyColorMap(errMap, heatmap, cv.COLORMAP_MAGMA);
+                    
+                    let cropped = heatmap.roi(new cv.Rect(0, 0, origW, origH));
+                    cv.imshow(canvasId, cropped);
+                    
+                    diffCr.delete(); diffCb.delete(); errMap.delete(); heatmap.delete(); cropped.delete();
+                };
+
+                renderError(Cr, Cb, fftCr, fftCb, 'canvasErrFFT');
+                renderError(Cr, Cb, dctCr, dctCb, 'canvasErrDCT');
+
+                // Cleanup main variables
+                src.delete(); padded.delete(); ycrcb.delete(); channels.delete();
+                Y.delete(); Cr.delete(); Cb.delete();
+                dctCr.delete(); dctCb.delete(); fftCr.delete(); fftCb.delete();
+                maskDCT.delete(); maskFFT.delete(); maskFFTComplex.delete(); mv.delete();
+                block.delete(); block32f.delete(); transformed.delete();
+
+                document.getElementById('statusText').innerText = "Done!";
+                document.getElementById('statusText').style.color = "#5cb85c";
+
+            } catch (err) {
+                // Safely grab the OpenCV error message if it fails again
+                let errorMsg = err;
+                if (typeof err === 'number') {
+                    try { errorMsg = cv.exceptionFromPtr(err).msg; } catch(e) {}
+                }
+                document.getElementById('statusText').innerText = "Crash Error: " + errorMsg;
+                document.getElementById('statusText').style.color = "#d9534f";
+                console.error(err);
             }
-
-            // Reconstruct and Render
-            const renderResult = (crChannel, cbChannel, canvasId) => {
-                let merged = new cv.Mat();
-                let v = new cv.MatVector();
-                v.push_back(Y); v.push_back(crChannel); v.push_back(cbChannel);
-                cv.merge(v, merged);
-                let rgb = new cv.Mat();
-                cv.cvtColor(merged, rgb, cv.COLOR_YCrCb2RGB);
-                let cropped = rgb.roi(new cv.Rect(0, 0, origW, origH));
-                cv.imshow(canvasId, cropped);
-                merged.delete(); rgb.delete(); cropped.delete(); v.delete();
-            };
-
-            renderResult(fftCr, fftCb, 'canvasFFT');
-            renderResult(dctCr, dctCb, 'canvasDCT');
-
-            // Error Maps
-            const renderError = (origCr, origCb, reconCr, reconCb, canvasId) => {
-                let diffCr = new cv.Mat(), diffCb = new cv.Mat();
-                cv.absdiff(origCr, reconCr, diffCr);
-                cv.absdiff(origCb, reconCb, diffCb);
-                
-                let errMap = new cv.Mat();
-                cv.addWeighted(diffCr, 0.5, diffCb, 0.5, 0, errMap);
-                
-                // Enhance visibility (vmax analog)
-                cv.convertScaleAbs(errMap, errMap, 255/8, 0); 
-                let heatmap = new cv.Mat();
-                cv.applyColorMap(errMap, heatmap, cv.COLORMAP_MAGMA);
-                
-                let cropped = heatmap.roi(new cv.Rect(0, 0, origW, origH));
-                cv.imshow(canvasId, cropped);
-                
-                diffCr.delete(); diffCb.delete(); errMap.delete(); heatmap.delete(); cropped.delete();
-            };
-
-            renderError(Cr, Cb, fftCr, fftCb, 'canvasErrFFT');
-            renderError(Cr, Cb, dctCr, dctCb, 'canvasErrDCT');
-
-            // Cleanup
-            src.delete(); padded.delete(); ycrcb.delete(); channels.delete();
-            Y.delete(); Cr.delete(); Cb.delete();
-            dctCr.delete(); dctCb.delete(); fftCr.delete(); fftCb.delete();
-            maskDCT.delete(); maskFFT.delete(); maskFFTComplex.delete(); mv.delete();
-            block.delete(); block32f.delete(); transformed.delete();
-
-            document.getElementById('statusText').innerText = "Done!";
-            document.getElementById('statusText').style.color = "#5cb85c";
         }
     </script>
 </body>
