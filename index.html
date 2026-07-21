@@ -124,7 +124,7 @@ function processImage() {
                 let canvasOrg = document.getElementById('canvasOriginal');
                 let ctx = canvasOrg.getContext('2d');
                 
-                let scale = Math.min(1.0, 256 / Math.max(imgElement.width, imgElement.height));
+                let scale = Math.min(1.0, 2048 / Math.max(imgElement.width, imgElement.height));
                 let origW = Math.round(imgElement.width * scale);
                 let origH = Math.round(imgElement.height * scale);
                 
